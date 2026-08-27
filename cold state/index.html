@@ -1,0 +1,1058 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#020617" />
+  <title>Cold state</title>
+  <link rel="icon" href="data:," />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
+</head>
+<body class="bg-slate-950">
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect } = React;
+
+    // COLD STATE — a pre-commitment tool.
+    // Temperature encodes state: sky = the calm self's voice, orange = heat of the moment.
+    // No streaks by design: logging a slip must cost exactly as much as logging a hold.
+    // Excuse content is novel every time; excuse FORM is not. The app supplies the moves.
+    // Persistence: localStorage — entries never leave this device.
+
+    const KEY = "cold-state-data";
+    const EMPTY = { agreements: [], events: [], activeGate: null };
+    const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    const DAY = 86400000;
+
+    const MOVES = [
+      "This time is different, because…",
+      "It’s too small to matter",
+      "I’ve earned it",
+      "That’s not really what she meant",
+      "She won’t know, so no harm done",
+      "Just this once — I’ll make it up",
+      "She does things I don’t like too",
+      "She doesn’t get to decide this",
+    ];
+
+    const canStore = (() => {
+      try {
+        localStorage.setItem("__cs", "1");
+        localStorage.removeItem("__cs");
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+
+    const fmtDate = (ts) =>
+      new Date(ts).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    const fmtClock = (ms) => {
+      const s = Math.max(0, Math.ceil(ms / 1000));
+      return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+    };
+
+    /* ---------------- icons ---------------- */
+
+    const Icon = ({ size = 16, children }) => (
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {children}
+      </svg>
+    );
+    const Plus = ({ size }) => (
+      <Icon size={size}>
+        <path d="M12 5v14M5 12h14" />
+      </Icon>
+    );
+    const X = ({ size }) => (
+      <Icon size={size}>
+        <path d="M18 6 6 18M6 6l12 12" />
+      </Icon>
+    );
+    const ChevronLeft = ({ size }) => (
+      <Icon size={size}>
+        <path d="m15 18-6-6 6-6" />
+      </Icon>
+    );
+    const Copy = ({ size }) => (
+      <Icon size={size}>
+        <rect x="9" y="9" width="13" height="13" rx="2" />
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+      </Icon>
+    );
+
+    /* ---------------- app ---------------- */
+
+    function ColdState() {
+      const [data, setData] = useState(() => {
+        if (!canStore) return EMPTY;
+        try {
+          const r = localStorage.getItem(KEY);
+          return r ? JSON.parse(r) : EMPTY;
+        } catch {
+          return EMPTY;
+        }
+      });
+      const [tab, setTab] = useState("agreements");
+      const [adding, setAdding] = useState(false);
+      const [tempted, setTempted] = useState(null);
+      const [gateHidden, setGateHidden] = useState(false);
+      const [slipFor, setSlipFor] = useState(null);
+      const [confirmErase, setConfirmErase] = useState(false);
+      const [toast, setToast] = useState("");
+      const [now, setNow] = useState(Date.now());
+      const noStorage = !canStore;
+
+      useEffect(() => {
+        if (!data.activeGate) return;
+        const t = setInterval(() => setNow(Date.now()), 500);
+        return () => clearInterval(t);
+      }, [data.activeGate]);
+
+      useEffect(() => {
+        if (!toast) return;
+        const t = setTimeout(() => setToast(""), 2200);
+        return () => clearTimeout(t);
+      }, [toast]);
+
+      const save = (next) => {
+        setData(next);
+        if (canStore) {
+          try {
+            localStorage.setItem(KEY, JSON.stringify(next));
+          } catch {
+            /* best effort */
+          }
+        }
+      };
+
+      const { agreements, events, activeGate } = data;
+      const byId = (id) => agreements.find((a) => a.id === id);
+
+      const addAgreement = (a) => {
+        save({ ...data, agreements: [...agreements, a] });
+        setAdding(false);
+        setToast("Agreement written.");
+      };
+      const removeAgreement = (id) =>
+        save({ ...data, agreements: agreements.filter((a) => a.id !== id) });
+
+      const startClock = (aid, moves, scripts, note, daylight) => {
+        const a = byId(aid);
+        save({
+          ...data,
+          activeGate: {
+            aid,
+            moves,
+            scripts,
+            note,
+            daylight,
+            endTs: Date.now() + a.delay * 60000,
+          },
+        });
+        setTempted(null);
+        setGateHidden(false);
+      };
+
+      const resolveGate = (outcome) => {
+        const g = activeGate;
+        save({
+          ...data,
+          activeGate: null,
+          events: [
+            ...events,
+            {
+              id: uid(),
+              kind: "gate",
+              aid: g.aid,
+              moves: g.moves || [],
+              scripts: g.scripts || [],
+              note: g.note,
+              daylight: g.daylight,
+              outcome,
+              ts: Date.now(),
+            },
+          ],
+        });
+        setGateHidden(false);
+        setToast("Logged.");
+      };
+
+      const logSlip = (aid, note) => {
+        save({
+          ...data,
+          events: [...events, { id: uid(), kind: "slip", aid, note, ts: Date.now() }],
+        });
+        setSlipFor(null);
+        setToast("Logged.");
+      };
+
+      const logSpeech = (mode, what, better) => {
+        save({
+          ...data,
+          events: [
+            ...events,
+            { id: uid(), kind: "speech", mode, what, better, ts: Date.now() },
+          ],
+        });
+        setToast("Logged.");
+      };
+
+      if (activeGate && !gateHidden)
+        return (
+          <GateScreen
+            gate={activeGate}
+            agreement={byId(activeGate.aid)}
+            now={now}
+            onHide={() => setGateHidden(true)}
+            onResolve={resolveGate}
+          />
+        );
+
+      if (tempted)
+        return (
+          <TemptedScreen
+            agreement={byId(tempted)}
+            blocked={!!activeGate}
+            onBack={() => setTempted(null)}
+            onStart={startClock}
+          />
+        );
+
+      if (adding)
+        return <AgreementForm onBack={() => setAdding(false)} onSave={addAgreement} />;
+
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-200">
+          <div className="max-w-md mx-auto px-5 pt-6 pb-28">
+            <p className="text-xs uppercase tracking-widest text-slate-600">Cold state</p>
+            {noStorage && (
+              <p className="mt-2 text-xs text-orange-300">
+                Storage unavailable in this browser — nothing will persist.
+              </p>
+            )}
+
+            {activeGate && (
+              <button
+                onClick={() => setGateHidden(false)}
+                className="mt-3 w-full text-left border border-orange-300 rounded-xl p-3"
+              >
+                <span className="text-xs uppercase tracking-widest text-orange-300">
+                  Clock running · {fmtClock(activeGate.endTs - now)}
+                </span>
+                <span className="block text-sm text-slate-300 mt-1">
+                  {byId(activeGate.aid)?.title}
+                </span>
+              </button>
+            )}
+
+            {tab === "agreements" && (
+              <AgreementsTab
+                agreements={agreements}
+                onAdd={() => setAdding(true)}
+                onTempted={setTempted}
+                slipFor={slipFor}
+                setSlipFor={setSlipFor}
+                onSlip={logSlip}
+                onRemove={removeAgreement}
+              />
+            )}
+            {tab === "speech" && <SpeechTab events={events} onLog={logSpeech} />}
+            {tab === "ledger" && (
+              <LedgerTab
+                data={data}
+                byId={byId}
+                confirmErase={confirmErase}
+                setConfirmErase={setConfirmErase}
+                onErase={() => {
+                  save(EMPTY);
+                  setConfirmErase(false);
+                }}
+                setToast={setToast}
+              />
+            )}
+          </div>
+
+          {toast && (
+            <div className="fixed bottom-20 left-0 right-0 flex justify-center">
+              <span className="bg-slate-800 text-slate-200 text-sm px-4 py-2 rounded-full">
+                {toast}
+              </span>
+            </div>
+          )}
+
+          <nav className="fixed bottom-0 left-0 right-0 bg-slate-950 border-t border-slate-800">
+            <div className="max-w-md mx-auto grid grid-cols-3">
+              {[
+                ["agreements", "Agreements"],
+                ["speech", "Said / unsaid"],
+                ["ledger", "Ledger"],
+              ].map(([id, label]) => (
+                <button
+                  key={id}
+                  onClick={() => setTab(id)}
+                  className={`py-4 text-xs uppercase tracking-widest text-center ${
+                    tab === id ? "text-slate-100" : "text-slate-600"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </nav>
+        </div>
+      );
+    }
+
+    /* ---------------- Agreements ---------------- */
+
+    function AgreementsTab({
+      agreements,
+      onAdd,
+      onTempted,
+      slipFor,
+      setSlipFor,
+      onSlip,
+      onRemove,
+    }) {
+      const [slipNote, setSlipNote] = useState("");
+      const [confirmRemove, setConfirmRemove] = useState(null);
+
+      return (
+        <div className="mt-6">
+          {agreements.length === 0 && (
+            <div className="border border-slate-800 rounded-xl p-5">
+              <p className="font-serif italic text-xl text-sky-200 leading-relaxed">
+                Rules you actually endorse, written while calm.
+              </p>
+              <p className="text-sm text-slate-400 mt-3 leading-relaxed">
+                When the heat comes, this shows you your own words back — and makes you
+                wait before you act. The ledger keeps you honest.
+              </p>
+            </div>
+          )}
+
+          {agreements.map((a) => (
+            <div key={a.id} className="border border-slate-800 rounded-xl p-4 mb-3">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-slate-100 font-medium">{a.title}</p>
+                {confirmRemove === a.id ? (
+                  <button
+                    onClick={() => {
+                      onRemove(a.id);
+                      setConfirmRemove(null);
+                    }}
+                    className="text-xs text-orange-300 uppercase tracking-widest"
+                  >
+                    Sure?
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setConfirmRemove(a.id)}
+                    className="text-slate-600"
+                    aria-label="Remove agreement"
+                  >
+                    <X size={16} />
+                  </button>
+                )}
+              </div>
+              <p className="font-serif italic text-sky-200 text-sm mt-2 leading-relaxed">
+                “{a.why}”
+              </p>
+
+              {slipFor === a.id ? (
+                <div className="mt-3">
+                  <input
+                    value={slipNote}
+                    onChange={(e) => setSlipNote(e.target.value)}
+                    placeholder="What happened — one line"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-slate-500"
+                  />
+                  <div className="flex gap-2 mt-2">
+                    <button
+                      onClick={() => {
+                        onSlip(a.id, slipNote.trim());
+                        setSlipNote("");
+                      }}
+                      className="flex-1 bg-slate-800 text-slate-100 text-sm py-2 rounded-lg"
+                    >
+                      Log it
+                    </button>
+                    <button
+                      onClick={() => setSlipFor(null)}
+                      className="px-4 text-sm text-slate-500"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex gap-2 mt-4">
+                  <button
+                    onClick={() => onTempted(a.id)}
+                    className="flex-1 border border-orange-300 text-orange-300 text-sm py-2 rounded-lg"
+                  >
+                    I’m tempted
+                  </button>
+                  <button
+                    onClick={() => setSlipFor(a.id)}
+                    className="px-4 text-sm text-slate-500"
+                  >
+                    I already did it
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+
+          <button
+            onClick={onAdd}
+            className="mt-2 w-full border border-slate-800 rounded-xl py-3 text-sm text-slate-400 flex items-center justify-center gap-2"
+          >
+            <Plus size={16} /> New agreement
+          </button>
+        </div>
+      );
+    }
+
+    function AgreementForm({ onBack, onSave }) {
+      const [title, setTitle] = useState("");
+      const [why, setWhy] = useState("");
+      const [rats, setRats] = useState([]);
+      const [ratInput, setRatInput] = useState("");
+      const [delay, setDelay] = useState(10);
+      const [err, setErr] = useState("");
+
+      const addRat = () => {
+        const v = ratInput.trim();
+        if (v) setRats([...rats, v]);
+        setRatInput("");
+      };
+
+      const submit = () => {
+        if (!title.trim()) return setErr("Name the agreement.");
+        if (!why.trim())
+          return setErr(
+            "The why is the whole tool. If you can’t write it honestly, don’t save this — take it back to Eva."
+          );
+        onSave({
+          id: uid(),
+          title: title.trim(),
+          why: why.trim(),
+          rats,
+          delay: Math.max(1, Number(delay) || 10),
+          created: Date.now(),
+        });
+      };
+
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-200">
+          <div className="max-w-md mx-auto px-5 pt-6 pb-16">
+            <button
+              onClick={onBack}
+              className="text-slate-500 flex items-center gap-1 text-sm"
+            >
+              <ChevronLeft size={16} /> Back
+            </button>
+
+            <p className="text-xs uppercase tracking-widest text-slate-600 mt-6">
+              The agreement
+            </p>
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="I don’t…"
+              className="mt-2 w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-slate-500"
+            />
+
+            <p className="text-xs uppercase tracking-widest text-slate-600 mt-6">
+              Why I actually agree
+            </p>
+            <textarea
+              value={why}
+              onChange={(e) => setWhy(e.target.value)}
+              rows={4}
+              placeholder="Written calm, in your own words. This is what you’ll be shown when it counts."
+              className="mt-2 w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-slate-500 font-serif italic"
+            />
+            <p className="text-xs text-slate-500 mt-2 leading-relaxed">
+              If you can’t fill this honestly, it isn’t an agreement yet — it’s an
+              argument you haven’t finished having. Have it with Eva first.
+            </p>
+
+            <p className="text-xs uppercase tracking-widest text-slate-600 mt-6">
+              Known scripts — optional
+            </p>
+            <div className="flex gap-2 mt-2">
+              <input
+                value={ratInput}
+                onChange={(e) => setRatInput(e.target.value)}
+                placeholder="A line you’ve caught yourself using"
+                className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-slate-500"
+              />
+              <button
+                onClick={addRat}
+                className="px-3 border border-slate-800 rounded-lg text-slate-400"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+            <div className="mt-2 space-y-2">
+              {rats.map((r, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between bg-slate-900 rounded-lg px-3 py-2 text-sm"
+                >
+                  <span className="text-slate-300 break-words">{r}</span>
+                  <button
+                    onClick={() => setRats(rats.filter((_, j) => j !== i))}
+                    className="text-slate-600"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-slate-500 mt-2 leading-relaxed">
+              Only lines you’ve actually used before. You don’t have to predict the rest
+              — the standard moves are built into the gate.
+            </p>
+
+            <p className="text-xs uppercase tracking-widest text-slate-600 mt-6">
+              Wait before acting (minutes)
+            </p>
+            <input
+              type="number"
+              min={1}
+              value={delay}
+              onChange={(e) => setDelay(e.target.value)}
+              className="mt-2 w-24 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-slate-500"
+            />
+
+            {err && <p className="text-sm text-orange-300 mt-4">{err}</p>}
+
+            <button
+              onClick={submit}
+              className="mt-6 w-full bg-slate-100 text-slate-950 font-medium py-3 rounded-xl"
+            >
+              Save agreement
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    /* ---------------- Tempted → clock ---------------- */
+
+    function TemptedScreen({ agreement, blocked, onBack, onStart }) {
+      const [moves, setMoves] = useState([]);
+      const [scripts, setScripts] = useState([]);
+      const [note, setNote] = useState("");
+      const [daylight, setDaylight] = useState(null);
+      if (!agreement) return null;
+
+      const toggleIn = (list, setList) => (r) =>
+        setList(list.includes(r) ? list.filter((x) => x !== r) : [...list, r]);
+      const toggleMove = toggleIn(moves, setMoves);
+      const toggleScript = toggleIn(scripts, setScripts);
+
+      const ready = daylight !== null && !blocked;
+
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-200">
+          <div className="max-w-md mx-auto px-5 pt-6 pb-16">
+            <button
+              onClick={onBack}
+              className="text-slate-500 flex items-center gap-1 text-sm"
+            >
+              <ChevronLeft size={16} /> Back
+            </button>
+
+            <p className="text-xs uppercase tracking-widest text-orange-300 mt-8">
+              {agreement.title}
+            </p>
+            <p className="font-serif italic text-2xl text-sky-200 leading-relaxed mt-4">
+              “{agreement.why}”
+            </p>
+            <p className="text-xs text-slate-500 mt-2">
+              You wrote that. Calm, and meaning it.
+            </p>
+
+            <div className="mt-8">
+              <p className="text-xs uppercase tracking-widest text-slate-600">
+                Name the move
+              </p>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                The wording is always new. The move rarely is.
+              </p>
+              <div className="mt-3 space-y-2">
+                {MOVES.map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => toggleMove(r)}
+                    className={`w-full text-left px-3 py-2 rounded-lg text-sm border ${
+                      moves.includes(r)
+                        ? "border-orange-300 text-orange-300"
+                        : "border-slate-800 text-slate-300"
+                    }`}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {agreement.rats.length > 0 && (
+              <div className="mt-6">
+                <p className="text-xs uppercase tracking-widest text-slate-600">
+                  Your known scripts
+                </p>
+                <div className="mt-3 space-y-2">
+                  {agreement.rats.map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => toggleScript(r)}
+                      className={`w-full text-left px-3 py-2 rounded-lg text-sm border ${
+                        scripts.includes(r)
+                          ? "border-orange-300 text-orange-300"
+                          : "border-slate-800 text-slate-300"
+                      }`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="The live excuse, word for word"
+              className="mt-6 w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-slate-500"
+            />
+            <p className="text-xs text-slate-500 mt-2 leading-relaxed">
+              Write it down exactly. It only works at full strength once.
+            </p>
+
+            <div className="mt-8">
+              <p className="text-xs uppercase tracking-widest text-slate-600">
+                The daylight test
+              </p>
+              <p className="text-sm text-slate-300 mt-2 leading-relaxed">
+                Would this reasoning survive being said to her, out loud, before you act?
+              </p>
+              <div className="flex gap-2 mt-3">
+                <button
+                  onClick={() => setDaylight("yes")}
+                  className={`flex-1 py-2 rounded-lg text-sm border ${
+                    daylight === "yes"
+                      ? "border-sky-200 text-sky-200"
+                      : "border-slate-800 text-slate-300"
+                  }`}
+                >
+                  It would
+                </button>
+                <button
+                  onClick={() => setDaylight("no")}
+                  className={`flex-1 py-2 rounded-lg text-sm border ${
+                    daylight === "no"
+                      ? "border-orange-300 text-orange-300"
+                      : "border-slate-800 text-slate-300"
+                  }`}
+                >
+                  It wouldn’t
+                </button>
+              </div>
+              {daylight === "yes" && (
+                <p className="text-xs text-slate-500 mt-2 leading-relaxed">
+                  Then say it to her now. The clock gives you the time.
+                </p>
+              )}
+              {daylight === "no" && (
+                <p className="text-xs text-slate-500 mt-2 leading-relaxed">
+                  That’s your answer. Let the clock hold it.
+                </p>
+              )}
+            </div>
+
+            {blocked && (
+              <p className="text-sm text-orange-300 mt-6">Finish the open clock first.</p>
+            )}
+            <button
+              onClick={() =>
+                ready && onStart(agreement.id, moves, scripts, note.trim(), daylight)
+              }
+              className={`mt-6 w-full font-medium py-3 rounded-xl ${
+                ready ? "bg-slate-100 text-slate-950" : "bg-slate-800 text-slate-500"
+              }`}
+            >
+              Start the clock · {agreement.delay} min
+            </button>
+            <p className="text-xs text-slate-500 mt-3 leading-relaxed">
+              {ready
+                ? "Nothing is decided until it runs out. You can close the app; the clock keeps going."
+                : "Answer the daylight test to start."}
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    function GateScreen({ gate, agreement, now, onHide, onResolve }) {
+      const remaining = gate.endTs - now;
+      const done = remaining <= 0;
+      const named = [...(gate.moves || []), ...(gate.scripts || []), ...(gate.told || [])];
+
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-200">
+          <div className="max-w-md mx-auto px-5 pt-6 pb-16">
+            <div className="flex justify-end">
+              <button onClick={onHide} className="text-sm text-slate-500">
+                Hide
+              </button>
+            </div>
+
+            {!done ? (
+              <React.Fragment>
+                <p className="text-6xl tabular-nums text-slate-100 mt-16 text-center">
+                  {fmtClock(remaining)}
+                </p>
+                <p className="font-serif italic text-2xl text-sky-200 leading-relaxed mt-12 text-center">
+                  “{agreement?.why}”
+                </p>
+                {named.length > 0 && (
+                  <div className="mt-10">
+                    <p className="text-xs uppercase tracking-widest text-slate-600 text-center">
+                      You named the move
+                    </p>
+                    <div className="mt-3 space-y-1">
+                      {named.map((r) => (
+                        <p key={r} className="text-sm text-orange-300 text-center">
+                          {r}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {gate.daylight === "no" && (
+                  <p className="text-xs text-slate-500 mt-8 text-center leading-relaxed">
+                    You already said this wouldn’t survive being said to her.
+                  </p>
+                )}
+                {gate.daylight === "yes" && (
+                  <p className="text-xs text-slate-500 mt-8 text-center leading-relaxed">
+                    You said it would survive her hearing it. Have you told her yet?
+                  </p>
+                )}
+              </React.Fragment>
+            ) : (
+              <React.Fragment>
+                <p className="text-xs uppercase tracking-widest text-slate-600 mt-16 text-center">
+                  The clock ran out
+                </p>
+                <p className="font-serif italic text-2xl text-sky-200 leading-relaxed mt-6 text-center">
+                  “{agreement?.why}”
+                </p>
+                {gate.daylight === "no" && (
+                  <p className="text-xs text-slate-500 mt-6 text-center leading-relaxed">
+                    You said this one wouldn’t survive daylight.
+                  </p>
+                )}
+                <div className="flex gap-3 mt-12">
+                  <button
+                    onClick={() => onResolve("held")}
+                    className="flex-1 bg-slate-800 text-slate-100 py-3 rounded-xl font-medium"
+                  >
+                    I held
+                  </button>
+                  <button
+                    onClick={() => onResolve("broke")}
+                    className="flex-1 bg-slate-800 text-slate-100 py-3 rounded-xl font-medium"
+                  >
+                    I did it anyway
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500 mt-4 text-center leading-relaxed">
+                  Log the truth either way. The ledger only works honest.
+                </p>
+              </React.Fragment>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    /* ---------------- Said / unsaid ---------------- */
+
+    function SpeechTab({ events, onLog }) {
+      const [mode, setMode] = useState(null);
+      const [what, setWhat] = useState("");
+      const [better, setBetter] = useState("");
+
+      const entries = events.filter((e) => e.kind === "speech").slice().reverse();
+
+      const submit = () => {
+        if (!what.trim()) return;
+        onLog(mode, what.trim(), better.trim());
+        setMode(null);
+        setWhat("");
+        setBetter("");
+      };
+
+      return (
+        <div className="mt-6">
+          {!mode ? (
+            <div className="flex gap-2">
+              <button
+                onClick={() => setMode("said")}
+                className="flex-1 border border-slate-800 rounded-xl py-3 text-sm text-slate-300"
+              >
+                Something I said
+              </button>
+              <button
+                onClick={() => setMode("unsaid")}
+                className="flex-1 border border-slate-800 rounded-xl py-3 text-sm text-slate-300"
+              >
+                Something I left unsaid
+              </button>
+            </div>
+          ) : (
+            <div className="border border-slate-800 rounded-xl p-4">
+              <p className="text-xs uppercase tracking-widest text-slate-600">
+                {mode === "said" ? "What I said" : "What I left unsaid"}
+              </p>
+              <textarea
+                value={what}
+                onChange={(e) => setWhat(e.target.value)}
+                rows={3}
+                placeholder="What happened, plainly."
+                className="mt-2 w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-slate-500"
+              />
+              <p className="text-xs uppercase tracking-widest text-slate-600 mt-4">
+                {mode === "said" ? "The better version" : "What needed saying"}
+              </p>
+              <textarea
+                value={better}
+                onChange={(e) => setBetter(e.target.value)}
+                rows={2}
+                className="mt-2 w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-slate-500"
+              />
+              <div className="flex gap-2 mt-4">
+                <button
+                  onClick={submit}
+                  className="flex-1 bg-slate-100 text-slate-950 text-sm font-medium py-2 rounded-lg"
+                >
+                  Log it
+                </button>
+                <button
+                  onClick={() => setMode(null)}
+                  className="px-4 text-sm text-slate-500"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          <p className="text-xs text-slate-500 mt-4 leading-relaxed">
+            No app catches words in flight. Logging fast and honest is what teaches you
+            to catch them a beat earlier next time.
+          </p>
+
+          <div className="mt-6 space-y-3">
+            {entries.map((e) => (
+              <div key={e.id} className="border border-slate-800 rounded-xl p-4">
+                <p className="text-xs uppercase tracking-widest text-slate-600">
+                  {e.mode === "said" ? "Said" : "Unsaid"} · {fmtDate(e.ts)}
+                </p>
+                <p className="text-sm text-slate-300 mt-2 break-words">{e.what}</p>
+                {e.better && (
+                  <p className="font-serif italic text-sm text-sky-200 mt-2 break-words">
+                    “{e.better}”
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    /* ---------------- Ledger ---------------- */
+
+    function LedgerTab({ data, byId, confirmErase, setConfirmErase, onErase, setToast }) {
+      const [summary, setSummary] = useState("");
+      const cutoff = Date.now() - 30 * DAY;
+      const recent = data.events.filter((e) => e.ts >= cutoff);
+
+      const held = recent.filter((e) => e.kind === "gate" && e.outcome === "held").length;
+      const broke =
+        recent.filter((e) => e.kind === "gate" && e.outcome === "broke").length +
+        recent.filter((e) => e.kind === "slip").length;
+      const speech = recent.filter((e) => e.kind === "speech").length;
+
+      const moveCounts = {};
+      recent
+        .filter((e) => e.kind === "gate")
+        .forEach((e) =>
+          [...(e.moves || []), ...(e.scripts || []), ...(e.told || [])].forEach(
+            (r) => (moveCounts[r] = (moveCounts[r] || 0) + 1)
+          )
+        );
+      const topMoves = Object.entries(moveCounts).sort((a, b) => b[1] - a[1]);
+
+      const buildSummary = () => {
+        const wk = Date.now() - 7 * DAY;
+        const ev = data.events.filter((e) => e.ts >= wk);
+        const lines = [`Week of ${fmtDate(wk)}–${fmtDate(Date.now())} — for Eva`, ""];
+        const h = ev.filter((e) => e.kind === "gate" && e.outcome === "held");
+        const b = ev.filter(
+          (e) => (e.kind === "gate" && e.outcome === "broke") || e.kind === "slip"
+        );
+        lines.push(`Held: ${h.length}`);
+        h.forEach((e) =>
+          lines.push(`  · ${byId(e.aid)?.title || "—"} (${fmtDate(e.ts)})`)
+        );
+        lines.push(`Broke: ${b.length}`);
+        b.forEach((e) =>
+          lines.push(
+            `  · ${byId(e.aid)?.title || "—"} (${fmtDate(e.ts)})${
+              e.note ? " — " + e.note : ""
+            }`
+          )
+        );
+        const sp = ev.filter((e) => e.kind === "speech");
+        if (sp.length) {
+          lines.push(`Said / unsaid: ${sp.length}`);
+          sp.forEach((e) =>
+            lines.push(`  · ${e.mode === "said" ? "Said" : "Unsaid"}: ${e.what}`)
+          );
+        }
+        setSummary(lines.join("\n"));
+      };
+
+      const copySummary = async () => {
+        try {
+          await navigator.clipboard.writeText(summary);
+          setToast("Copied.");
+        } catch {
+          setToast("Select the text and copy it.");
+        }
+      };
+
+      return (
+        <div className="mt-6">
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              [held, "Held"],
+              [broke, "Broke"],
+              [speech, "Said / unsaid"],
+            ].map(([n, label]) => (
+              <div
+                key={label}
+                className="border border-slate-800 rounded-xl p-4 text-center"
+              >
+                <p className="text-2xl text-slate-100 tabular-nums">{n}</p>
+                <p className="text-xs uppercase tracking-widest text-slate-600 mt-1">
+                  {label}
+                </p>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-slate-600 mt-2">
+            Last 30 days. No streaks — on purpose.
+          </p>
+
+          {topMoves.length > 0 && (
+            <div className="mt-8">
+              <p className="text-xs uppercase tracking-widest text-slate-600">
+                Your repeat moves
+              </p>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                New wording every time. Same move.
+              </p>
+              <div className="mt-3 space-y-2">
+                {topMoves.map(([r, n]) => (
+                  <div
+                    key={r}
+                    className="flex items-center justify-between border border-slate-800 rounded-lg px-3 py-2"
+                  >
+                    <span className="text-sm text-slate-300 break-words">{r}</span>
+                    <span className="text-sm text-orange-300 tabular-nums">{n}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-8">
+            <button
+              onClick={buildSummary}
+              className="w-full border border-sky-200 text-sky-200 rounded-xl py-3 text-sm"
+            >
+              Build this week’s summary for Eva
+            </button>
+            {summary && (
+              <div className="mt-3 border border-slate-800 rounded-xl p-4">
+                <pre className="whitespace-pre-wrap text-sm text-slate-300 select-text break-words" style={{ fontFamily: "inherit" }}>
+                  {summary}
+                </pre>
+                <button
+                  onClick={copySummary}
+                  className="mt-3 flex items-center gap-2 text-sm text-slate-400"
+                >
+                  <Copy size={14} /> Copy
+                </button>
+              </div>
+            )}
+            <p className="text-xs text-slate-500 mt-3 leading-relaxed">
+              Whether you send it is the real test of this whole system.
+            </p>
+          </div>
+
+          <div className="mt-12">
+            {confirmErase ? (
+              <div className="flex gap-2">
+                <button
+                  onClick={onErase}
+                  className="flex-1 border border-orange-300 text-orange-300 rounded-lg py-2 text-sm"
+                >
+                  Erase everything
+                </button>
+                <button
+                  onClick={() => setConfirmErase(false)}
+                  className="px-4 text-sm text-slate-500"
+                >
+                  Keep it
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmErase(true)}
+                className="text-xs text-slate-600 uppercase tracking-widest"
+              >
+                Erase all data
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<ColdState />);
+  </script>
+</body>
+</html>
